@@ -1,32 +1,29 @@
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import Link from "next/link";
 
 export default function Page() {
   return (
-    <div className="flex min-h-svh w-full items-center justify-center p-6 md:p-10">
-      <div className="w-full max-w-sm">
-        <div className="flex flex-col gap-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-2xl">
-                Thank you for signing up!
-              </CardTitle>
-              <CardDescription>Check your email to confirm</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">
-                You&apos;ve successfully signed up. Please check your email to
-                confirm your account before signing in.
-              </p>
-            </CardContent>
-          </Card>
-        </div>
+    <main className="flex min-h-svh items-center justify-center bg-background px-6 text-foreground">
+      <div className="w-full max-w-md text-center">
+        <p className="text-sm font-medium uppercase tracking-[0.25em] text-muted-foreground">
+          AnotherU
+        </p>
+
+        <h1 className="mt-6 text-4xl font-semibold tracking-tight">
+          One last step.
+        </h1>
+
+        <p className="mt-5 text-base leading-7 text-muted-foreground">
+          We sent a confirmation link to your email. Confirm your account and
+          then come back to meet your timelines.
+        </p>
+
+        <Link
+          href="/auth/login"
+          className="mt-8 inline-flex rounded-full bg-foreground px-7 py-3 text-sm font-medium text-background transition hover:opacity-90"
+        >
+          Continue to login
+        </Link>
       </div>
-    </div>
+    </main>
   );
 }
