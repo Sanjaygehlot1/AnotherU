@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { buildTimelineContext } from "@/lib/ai/context";
 import { generatePresentYouResponse } from "@/lib/ai/gateway";
-import { extractMemories } from "@/lib/ai/memory-extractor";
 import { createClient } from "@/lib/supabase/server";
 
 export async function POST(request: Request) {
@@ -122,38 +121,17 @@ export async function POST(request: Request) {
         //
         // Memory extraction is intentionally best-effort.
         // A memory extraction failure must not break the conversation.
-        try {
-            const extraction = await extractMemories(content);
+        const { error: jobError } = await supabase
+            .from("memory_jobs")
+            .insert({
+                user_id: user.id,
+                timeline_id: conversation.timeline_id,
+                source_message_id: userMessage.id,
+            });
 
-            if (extraction.memories.length > 0) {
-                const memoryRows = extraction.memories.map((memory) => ({
-                    user_id: user.id,
-                    timeline_id: conversation.timeline_id,
-                    type: memory.type,
-                    content: memory.content,
-                    importance: memory.importance,
-                    confidence: memory.confidence,
-                    source: "conversation",
-                    source_message_id: userMessage.id,
-                    status: "active",
-                }));
-
-                const { error: memoryError } = await supabase
-                    .from("memories")
-                    .insert(memoryRows);
-
-                if (memoryError) {
-                    console.error(
-                        "Memory persistence failed:",
-                        memoryError,
-                    );
-                }
-            }
-        } catch (memoryExtractionError) {
-            console.error(
-                "Memory extraction failed:",
-                memoryExtractionError,
-            );
+        if (jobError && jobError.code !== "23505") {
+            console.error("[MEMORY JOB] enqueue failed", jobError);
+            throw jobError;
         }
 
         // Update conversation activity.
