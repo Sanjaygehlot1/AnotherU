@@ -7,8 +7,8 @@ export const memoryTypeSchema = z.enum([
   "experience",
   "relationship",
   "belief",
+  "habit",
 ]);
-
 export const memoryCandidateSchema = z.object({
   type: memoryTypeSchema,
   content: z.string().trim().min(1).max(500),

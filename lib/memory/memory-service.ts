@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { generateEmbedding } from "@/lib/ai/embeddings/gateway";
 import {
     decideMemory,
+    isRetractionOnly,
     type MatchingMemory,
 } from "@/lib/memory/memory-decision";
 
@@ -141,28 +142,45 @@ export async function saveMemories({
     }
 
     /*
-     * ---------------------------------------------------------
-     * PHASE 3 — Semantic retrieval + decision engine
-     * ---------------------------------------------------------
-     */
-    const rows = [];
-    let savedCount = 0;
+ * ---------------------------------------------------------
+ * PHASE 3 — PLAN ALL MEMORY MUTATIONS
+ * ---------------------------------------------------------
+ *
+ * IMPORTANT:
+ *
+ * We do NOT mutate PostgreSQL inside this loop.
+ *
+ * Every candidate is evaluated against the SAME pre-existing
+ * memory state.
+ */
+
+    const rows: Array<{
+        type: MemoryCandidate["type"];
+        content: string;
+        importance: number;
+        confidence: number;
+        supersedes_memory_id?: string;
+        embedding: number[];
+    }> = [];
+
+    const retractIds = new Set<string>();
+    const supersedeIds = new Set<string>();
+
+    let reviewedCount = 0;
+    let skippedCount = 0;
 
     for (const memory of newMemories) {
         /*
-         * Generate embedding for the candidate.
+         * Generate candidate embedding.
          */
         const embedding = await generateEmbedding(
             memory.content,
         );
 
         /*
-         * Retrieve nearby active memories.
+         * Retrieve semantic candidates.
          *
-         * 0.72 is NOT a duplicate threshold.
-         *
-         * It simply gives our decision engine a wider candidate
-         * set for update/conflict detection.
+         * 0.72 is a retrieval threshold, NOT a decision threshold.
          */
         const { data: matches, error: matchError } =
             await supabase.rpc(
@@ -183,10 +201,27 @@ export async function saveMemories({
         const semanticMatches =
             (matches ?? []) as MatchingMemory[];
 
+        /*
+         * Prefer a same-type match when one exists.
+         *
+         * Example:
+         *
+         * candidate type = goal
+         *
+         * If the search returns:
+         *   fact  0.93
+         *   goal  0.86
+         *
+         * the goal is more relevant for update/supersession.
+         */
+        const sameTypeMatch = semanticMatches.find(
+            (match) => match.type === memory.type,
+        );
+
         const bestMatch =
-            semanticMatches.length > 0
-                ? semanticMatches[0]
-                : null;
+            sameTypeMatch ??
+            semanticMatches[0] ??
+            null;
 
         const decision = decideMemory(
             memory,
@@ -200,115 +235,188 @@ export async function saveMemories({
             reason: decision.reason,
             match: decision.match
                 ? {
-                      id: decision.match.id,
-                      similarity: Number(
-                          decision.match.similarity.toFixed(3),
-                      ),
-                      content: decision.match.content,
-                  }
+                    id: decision.match.id,
+                    similarity: Number(
+                        decision.match.similarity.toFixed(3),
+                    ),
+                    content: decision.match.content,
+                }
                 : null,
         });
 
         /*
          * -----------------------------------------------------
-         * Semantic duplicate
+         * SKIP
          * -----------------------------------------------------
          */
         if (decision.action === "skip") {
+            skippedCount++;
+
             continue;
         }
 
         /*
          * -----------------------------------------------------
-         * Explicit update / supersession
+         * REVIEW
          * -----------------------------------------------------
          *
-         * We mark the old memory as superseded BEFORE inserting
-         * the new one.
+         * Do nothing to persistent identity.
          *
-         * This works well with retries:
-         *
-         * old memory
-         *    ↓
-         * superseded
-         *    ↓
-         * insert new memory
-         *
-         * If insertion fails, the durable memory job retries.
+         * The original user message remains available as raw
+         * evidence.
          */
-        if (decision.action === "supersede") {
-            const { error: supersedeError } =
-                await supabase
-                    .from("memories")
-                    .update({
-                        status: "superseded",
-                        updated_at:
-                            new Date().toISOString(),
-                    })
-                    .eq("id", decision.match.id)
-                    .eq("user_id", userId)
-                    .eq("timeline_id", timelineId)
-                    .eq("status", "active");
+        if (decision.action === "review") {
+            reviewedCount++;
 
-            if (supersedeError) {
-                throw supersedeError;
-            }
+            console.info(
+                "[MEMORY] deferred for review",
+                {
+                    sourceMessageId,
+                    candidate: memory.content,
+                    reason: decision.reason,
+                },
+            );
 
-            console.info("[MEMORY] superseded", {
-                oldMemoryId: decision.match.id,
-                oldContent: decision.match.content,
-                newContent: memory.content,
-                sourceMessageId,
-            });
+            continue;
         }
 
         /*
          * -----------------------------------------------------
-         * Save new memory
+         * SUPERSEDE / RETRACT
+         * -----------------------------------------------------
+         */
+        if (decision.action === "supersede") {
+            const oldMemoryId = decision.match.id;
+
+            if (isRetractionOnly(memory.content)) {
+                retractIds.add(oldMemoryId);
+
+                console.info(
+                    "[MEMORY] planned retraction",
+                    {
+                        oldMemoryId,
+                        oldContent:
+                            decision.match.content,
+                        sourceMessageId,
+                    },
+                );
+
+                /*
+                 * The retraction statement itself is not stored
+                 * as an active memory.
+                 */
+                continue;
+            }
+
+            supersedeIds.add(oldMemoryId);
+
+            /*
+             * The new memory references the memory it replaces.
+             */
+            rows.push({
+                type: memory.type,
+                content: memory.content,
+                importance: memory.importance,
+                confidence: memory.confidence,
+                supersedes_memory_id:
+                    oldMemoryId,
+                embedding,
+            });
+
+            continue;
+        }
+
+        /*
+         * -----------------------------------------------------
+         * SAVE
          * -----------------------------------------------------
          */
         rows.push({
-            user_id: userId,
-            timeline_id: timelineId,
             type: memory.type,
             content: memory.content,
             importance: memory.importance,
             confidence: memory.confidence,
-            source: "conversation" as const,
-            source_message_id: sourceMessageId,
-            status: "active" as const,
             embedding,
-            ...(decision.action === "supersede"
-                ? {
-                      supersedes_memory_id:
-                          decision.match.id,
-                  }
-                : {}),
         });
     }
 
-    if (rows.length === 0) {
-        console.info("[MEMORY] no new memories saved", {
+    /*
+     * If the same old memory was both retracted and replaced
+     * within one message, replacement wins.
+     *
+     * Example:
+     *
+     * "I no longer want DevOps.
+     *  I want backend instead."
+     */
+    for (const id of supersedeIds) {
+        retractIds.delete(id);
+    }
+
+    /*
+     * ---------------------------------------------------------
+     * PHASE 4 — ONE ATOMIC DATABASE MUTATION
+     * ---------------------------------------------------------
+     */
+    if (
+        rows.length === 0 &&
+        retractIds.size === 0 &&
+        supersedeIds.size === 0
+    ) {
+        console.info("[MEMORY] no persistent mutations", {
             sourceMessageId,
+            skipped: skippedCount,
+            reviewed: reviewedCount,
         });
 
         return 0;
     }
 
-    const { error: insertError } = await supabase
-        .from("memories")
-        .insert(rows);
+    const { data: savedCount, error: consolidationError } =
+        await supabase.rpc(
+            "consolidate_memory_batch",
+            {
+                p_user_id: userId,
+                p_timeline_id: timelineId,
+                p_source_message_id:
+                    sourceMessageId,
+                p_retract_ids: [
+                    ...retractIds,
+                ],
+                p_supersede_ids: [
+                    ...supersedeIds,
+                ],
+                p_new_memories: rows.map(
+                    (row) => ({
+                        type: row.type,
+                        content: row.content,
+                        importance:
+                            row.importance,
+                        confidence:
+                            row.confidence,
+                        supersedes_memory_id:
+                            row.supersedes_memory_id ??
+                            null,
+                        embedding:
+                            row.embedding,
+                    }),
+                ),
+            },
+        );
 
-    if (insertError) {
-        throw insertError;
+    if (consolidationError) {
+        throw consolidationError;
     }
 
-    savedCount = rows.length;
-
-    console.info("[MEMORY] saved", {
+    console.info("[MEMORY] consolidated", {
         sourceMessageId,
-        count: savedCount,
+        saved: Number(savedCount ?? 0),
+        retracted: retractIds.size,
+        superseded: supersedeIds.size,
+        skipped: skippedCount,
+        reviewed: reviewedCount,
     });
 
-    return savedCount;
+    return Number(savedCount ?? 0);
+
 }

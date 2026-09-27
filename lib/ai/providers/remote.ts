@@ -87,6 +87,10 @@ Do not include explanations outside the JSON.`,
 
     try {
       parsed = JSON.parse(text);
+      console.info("[AI STRUCTURED RAW]", {
+        text,
+        parsed,
+      });
     } catch {
       throw new Error("Remote AI returned invalid JSON");
     }
