@@ -18,6 +18,7 @@ type GenerateResponse = {
 };
 
 async function generate(
+  model: string,
   system: string,
   user: string,
   maxNewTokens = 150,
@@ -29,6 +30,7 @@ async function generate(
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({
+      model,
       system,
       user,
       max_new_tokens: maxNewTokens,
@@ -54,15 +56,24 @@ async function generate(
 }
 
 export const remoteProvider: AIProvider = {
-  async generateText({ system, user }) {
-    return generate(system, user);
+  async generateText({ model, system, user }) {
+    return generate(model, system, user);
   },
 
   async generateStructured<T>(
-    { system, user } : {system : string, user: string},
+    {
+      model,
+      system,
+      user,
+    }: {
+      model: string;
+      system: string;
+      user: string;
+    },
     schema: ZodType<T>,
   ): Promise<T> {
     const text = await generate(
+      model,
       `${system}
 
 Return ONLY valid JSON.

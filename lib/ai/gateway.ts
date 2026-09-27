@@ -1,6 +1,6 @@
 import type { ZodType } from "zod";
-import { remoteProvider } from "./providers/remote";
 import type { AIProvider } from "./provider";
+import { remoteProvider } from "./providers/remote";
 import { ollamaProvider } from "./providers/ollama";
 
 export type TimelineContext = {
@@ -29,21 +29,82 @@ export type TimelineContext = {
   }>;
 };
 
+export type AITask =
+  | "conversation"
+  | "memory_extraction"
+  | "future_simulation"
+  | "alternate_timeline";
+
+type AITaskConfig = {
+  provider: string;
+  model: string;
+};
+
+const defaultProvider = process.env.AI_PROVIDER ?? "ollama";
+
+const AI_TASKS: Record<AITask, AITaskConfig> = {
+  conversation: {
+    provider: process.env.CONVERSATION_PROVIDER ?? defaultProvider,
+    model:
+      process.env.CONVERSATION_MODEL ??
+      getDefaultModel(
+        process.env.CONVERSATION_PROVIDER ?? defaultProvider,
+      ),
+  },
+
+  memory_extraction: {
+    provider: process.env.MEMORY_PROVIDER ?? defaultProvider,
+    model:
+      process.env.MEMORY_MODEL ??
+      getDefaultModel(
+        process.env.MEMORY_PROVIDER ?? defaultProvider,
+      ),
+  },
+
+  future_simulation: {
+    provider: process.env.FUTURE_PROVIDER ?? defaultProvider,
+    model:
+      process.env.FUTURE_MODEL ??
+      getDefaultModel(
+        process.env.FUTURE_PROVIDER ?? defaultProvider,
+      ),
+  },
+
+  alternate_timeline: {
+    provider: process.env.ALTERNATE_TIMELINE_PROVIDER ?? defaultProvider,
+    model:
+      process.env.ALTERNATE_TIMELINE_MODEL ??
+      getDefaultModel(
+        process.env.ALTERNATE_TIMELINE_PROVIDER ?? defaultProvider,
+      ),
+  },
+};
+
 const providers: Record<string, AIProvider> = {
   ollama: ollamaProvider,
   remote: remoteProvider,
 };
 
-const providerName = process.env.AI_PROVIDER ?? "ollama";
+function resolveTask(task: AITask) {
+  const config = AI_TASKS[task];
 
-export const aiProvider = providers[providerName];
+  if (!config) {
+    throw new Error(`Unsupported AI task: ${task}`);
+  }
 
-if (!aiProvider) {
-  throw new Error(
-    `Unsupported AI provider: "${providerName}". ` +
-    `Supported providers: ${Object.keys(providers).join(", ")}`,
-  );
-};
+  const provider = providers[config.provider];
+
+  if (!provider) {
+    throw new Error(
+      `Unsupported AI provider "${config.provider}" for task "${task}"`,
+    );
+  }
+
+  return {
+    provider,
+    model: config.model,
+  };
+}
 
 function formatMemories(context: TimelineContext) {
   if (context.memories.length === 0) {
@@ -272,11 +333,25 @@ The goal is to feel recognizably personal.
 `;
 }
 
+function getDefaultModel(provider: string) {
+  switch (provider) {
+    case "remote":
+      return process.env.REMOTE_AI_MODEL ?? "Qwen/Qwen3-4B";
+
+    case "ollama":
+      return process.env.OLLAMA_MODEL ?? "qwen3:4b";
+
+    default:
+      throw new Error(`No default model configured for provider "${provider}"`);
+  }
+}
+
 export async function generatePresentYouResponse(
   context: TimelineContext,
   userMessage: string,
 ) {
-  return aiProvider.generateText({
+  return generateText({
+    task: "conversation",
     system: buildPresentYouPrompt(context),
     user: `<user_message>
 ${userMessage}
@@ -285,18 +360,59 @@ ${userMessage}
 }
 
 export async function generateText(input: {
+  task: AITask;
   system: string;
   user: string;
-}) {
-  return aiProvider.generateText(input);
+}): Promise<string> {
+  const { provider, model } = resolveTask(input.task);
+
+  const startedAt = performance.now();
+
+  try {
+    return await provider.generateText({
+      model,
+      system: input.system,
+      user: input.user,
+    });
+  } finally {
+    const durationMs = Math.round(performance.now() - startedAt);
+
+    console.info("[AI]", {
+      task: input.task,
+      model,
+      durationMs,
+    });
+  }
 }
 
 export async function generateStructured<T>(
   input: {
+    task: AITask;
     system: string;
     user: string;
   },
   schema: ZodType<T>,
 ): Promise<T> {
-  return aiProvider.generateStructured(input, schema);
+  const { provider, model } = resolveTask(input.task);
+
+  const startedAt = performance.now();
+
+  try {
+    return await provider.generateStructured(
+      {
+        model,
+        system: input.system,
+        user: input.user,
+      },
+      schema,
+    );
+  } finally {
+    const durationMs = Math.round(performance.now() - startedAt);
+
+    console.info("[AI]", {
+      task: input.task,
+      model,
+      durationMs,
+    });
+  }
 }

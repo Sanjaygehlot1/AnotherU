@@ -17,69 +17,56 @@ function createTimeoutSignal() {
 }
 
 export const ollamaProvider: AIProvider = {
-    async generateText({ system, user }) {
-        const response = await client.chat.completions.create(
-            {
-                model,
-                messages: [
-                    {
-                        role: "system",
-                        content: system,
-                    },
-                    {
-                        role: "user",
-                        content: user,
-                    },
-                ],
-            },
-            {
-                signal: createTimeoutSignal(),
-            },
-        );
+    async generateText({ model, system, user }) {
+        const response = await client.chat.completions.create({
+            model,
+            messages: [
+                {
+                    role: "system",
+                    content: system,
+                },
+                {
+                    role: "user",
+                    content: user,
+                },
+            ],
+        });
 
-        const content = response.choices[0]?.message?.content;
-
-        if (!content || typeof content !== "string") {
-            throw new Error("Ollama returned an empty response");
-        }
-
-        return content.trim();
+        return response.choices[0]?.message?.content?.trim() ?? "";
     },
 
     async generateStructured<T>(
-        input: {
+        {
+            model,
+            system,
+            user,
+        }: {
+            model: string;
             system: string;
             user: string;
         },
         schema: ZodType<T>,
     ): Promise<T> {
-        const { system, user } = input;
-
-        const response = await client.chat.completions.create(
-            {
-                model,
-                messages: [
-                    {
-                        role: "system",
-                        content: system,
-                    },
-                    {
-                        role: "user",
-                        content: user,
-                    },
-                ],
-                response_format: {
-                    type: "json_object",
+        const response = await client.chat.completions.create({
+            model,
+            messages: [
+                {
+                    role: "system",
+                    content: system,
                 },
+                {
+                    role: "user",
+                    content: user,
+                },
+            ],
+            response_format: {
+                type: "json_object",
             },
-            {
-                signal: createTimeoutSignal(),
-            },
-        );
+        });
 
         const content = response.choices[0]?.message?.content;
 
-        if (!content || typeof content !== "string") {
+        if (!content) {
             throw new Error("Ollama returned an empty structured response");
         }
 

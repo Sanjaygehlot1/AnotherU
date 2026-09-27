@@ -108,6 +108,7 @@ export async function extractMemories(
 ): Promise<MemoryExtraction> {
   return generateStructured(
     {
+      task: "memory_extraction",
       system: MEMORY_EXTRACTION_SYSTEM_PROMPT,
       user: `<user_message>
 ${userMessage}
