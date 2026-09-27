@@ -116,12 +116,12 @@ export default async function TimelinePage() {
             {timeline.description}
           </p>
 
-          <button
-            type="button"
-            className="mt-6 rounded-full bg-foreground px-6 py-3 text-sm font-medium text-background transition hover:opacity-90"
+          <a
+            href={`/timeline/${timeline.id}/chat`}
+            className="mt-6 inline-flex rounded-full bg-foreground px-6 py-3 text-sm font-medium text-background transition hover:opacity-90"
           >
             Talk to Present You
-          </button>
+          </a>
         </section>
       </div>
     </main>
@@ -142,11 +142,10 @@ function TimelineNode({
   return (
     <div className="relative flex gap-6 pb-10 last:pb-0">
       <div
-        className={`relative z-10 mt-1 flex h-12 w-12 shrink-0 items-center justify-center rounded-full border ${
-          active
-            ? "border-foreground bg-foreground text-background"
-            : "border-border bg-background"
-        }`}
+        className={`relative z-10 mt-1 flex h-12 w-12 shrink-0 items-center justify-center rounded-full border ${active
+          ? "border-foreground bg-foreground text-background"
+          : "border-border bg-background"
+          }`}
       >
         <span className="h-2 w-2 rounded-full bg-current" />
       </div>
