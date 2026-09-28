@@ -38,6 +38,7 @@ type OllamaChatChunk = {
     total_duration?: number;
     load_duration?: number;
     prompt_eval_count?: number;
+    prompt_eval_cached_count?: number;
     prompt_eval_duration?: number;
     eval_count?: number;
     eval_duration?: number;
@@ -85,6 +86,9 @@ export const ollamaProvider: AIProvider = {
     },
 
     async *streamText({ model, system, user }) {
+        const startedAt = performance.now();
+        let firstTokenAt: number | null = null;
+
         const response = await fetch(`${baseURL}/api/chat`, {
             method: "POST",
             headers: {
@@ -95,6 +99,11 @@ export const ollamaProvider: AIProvider = {
                 messages: buildMessages(system, user),
                 stream: true,
                 think: false,
+                keep_alive: "30m",
+                options: {
+                    num_ctx: 2048,
+                    num_predict: 128,
+                },
             }),
             signal: createTimeoutSignal(),
         });
@@ -145,20 +154,82 @@ export const ollamaProvider: AIProvider = {
                         );
                     }
 
-                    // With think:false, normal assistant text is in content.
                     const content = chunk.message?.content;
 
                     if (content) {
+                        if (firstTokenAt === null) {
+                            firstTokenAt = performance.now();
+
+                            console.info("[OLLAMA FIRST TOKEN]", {
+                                model,
+                                ttftMs: Math.round(
+                                    firstTokenAt - startedAt,
+                                ),
+                            });
+                        }
+
                         yield content;
                     }
 
                     if (chunk.done) {
+                        console.info("[OLLAMA STREAM METRICS]", {
+                            model,
+
+                            totalDurationMs: chunk.total_duration
+                                ? Math.round(
+                                    chunk.total_duration / 1_000_000,
+                                )
+                                : null,
+
+                            promptEvalCachedCount:
+                                chunk.prompt_eval_cached_count ?? null,
+
+                            loadDurationMs: chunk.load_duration
+                                ? Math.round(
+                                    chunk.load_duration / 1_000_000,
+                                )
+                                : null,
+
+                            promptEvalCount:
+                                chunk.prompt_eval_count ?? null,
+
+                            promptEvalDurationMs:
+                                chunk.prompt_eval_duration
+                                    ? Math.round(
+                                        chunk.prompt_eval_duration /
+                                        1_000_000,
+                                    )
+                                    : null,
+
+                            evalCount:
+                                chunk.eval_count ?? null,
+
+                            evalDurationMs:
+                                chunk.eval_duration
+                                    ? Math.round(
+                                        chunk.eval_duration /
+                                        1_000_000,
+                                    )
+                                    : null,
+
+                            generationTokensPerSecond:
+                                chunk.eval_count &&
+                                    chunk.eval_duration
+                                    ? Number(
+                                        (
+                                            chunk.eval_count /
+                                            (chunk.eval_duration /
+                                                1_000_000_000)
+                                        ).toFixed(2),
+                                    )
+                                    : null,
+                        });
+
                         return;
                     }
                 }
             }
 
-            // Flush any remaining UTF-8 bytes.
             buffer += decoder.decode();
 
             const trimmed = buffer.trim();
@@ -177,6 +248,17 @@ export const ollamaProvider: AIProvider = {
                 const content = chunk.message?.content;
 
                 if (content) {
+                    if (firstTokenAt === null) {
+                        firstTokenAt = performance.now();
+
+                        console.info("[OLLAMA FIRST TOKEN]", {
+                            model,
+                            ttftMs: Math.round(
+                                firstTokenAt - startedAt,
+                            ),
+                        });
+                    }
+
                     yield content;
                 }
             }

@@ -49,7 +49,7 @@ export async function buildTimelineContext(
         .eq("conversation_id", conversationId)
         .eq("user_id", user.id)
         .order("created_at", { ascending: false })
-        .limit(20);
+        .limit(8);
 
     if (messagesError) {
         throw new Error("Failed to load conversation");
@@ -74,7 +74,7 @@ export async function buildTimelineContext(
         userId: user.id,
         timelineId,
         query: currentUserMessage,
-        matchCount: 5,
+        matchCount: 3,
         minSimilarity: 0.72,
     });
 
