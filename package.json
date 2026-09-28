@@ -9,7 +9,8 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
     "embedding:test": "tsx workers/test-embedding.ts",
-    "worker:memory": "tsx workers/start-memory-worker.ts"
+    "worker:memory": "tsx workers/start-memory-worker.ts",
+    "ai:remote:stream:test": "tsx scripts/test-remote-stream.ts"
   },
   "dependencies": {
     "@google/genai": "^2.24.0",

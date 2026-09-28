@@ -7,6 +7,12 @@ export interface AIProvider {
     user: string;
   }): Promise<string>;
 
+  streamText(input: {
+    model: string;
+    system: string;
+    user: string;
+  }): AsyncIterable<string>;
+
   generateStructured<T>(
     input: {
       model: string;
@@ -16,3 +22,4 @@ export interface AIProvider {
     schema: ZodType<T>,
   ): Promise<T>;
 }
+

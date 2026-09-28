@@ -47,22 +47,22 @@ export async function retrieveRelevantMemories(input: {
             p_user_id: userId,
             p_timeline_id: timelineId,
             p_embedding: embedding,
-            p_match_count: matchCount,
+            p_match_count: Math.min(matchCount, 20),
             p_min_similarity: minSimilarity,
         },
     );
 
     if (error) {
-        throw error;
+        throw new Error(
+            `Failed to retrieve memories: ${error.message}`,
+        );
     }
 
     const memories = (data ?? []) as RetrievedMemory[];
 
     console.info("[MEMORY RETRIEVAL]", {
-        userId,
         timelineId,
         query: trimmedQuery,
-        requested: matchCount,
         returned: memories.length,
         matches: memories.map((memory) => ({
             id: memory.id,

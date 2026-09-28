@@ -1,100 +1,122 @@
+import OpenAI from "openai";
 import type { ZodType } from "zod";
 import type { AIProvider } from "../provider";
 
-const baseURL = process.env.REMOTE_AI_URL;
+function getClient() {
+    const baseURL = process.env.REMOTE_AI_URL?.replace(/\/+$/, "");
+    const token = process.env.REMOTE_AI_TOKEN;
 
-const token = process.env.REMOTE_AI_TOKEN;
+    if (!baseURL) {
+        throw new Error("REMOTE_AI_URL is not configured");
+    }
 
-if (!baseURL) {
-  throw new Error("REMOTE_AI_URL is not configured");
+    if (!token) {
+        throw new Error("REMOTE_AI_TOKEN is not configured");
+    }
+
+    return new OpenAI({
+        baseURL: `${baseURL}/v1`,
+        apiKey: token,
+    });
 }
 
-if (!token) {
-  throw new Error("REMOTE_AI_TOKEN is not configured");
-}
-
-type GenerateResponse = {
-  text: string;
-};
-
-async function generate(
-  model: string,
-  system: string,
-  user: string,
-  maxNewTokens = 150,
-): Promise<string> {
-  const response = await fetch(`${baseURL}/generate`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      model,
-      system,
-      user,
-      max_new_tokens: maxNewTokens,
-    }),
-    signal: AbortSignal.timeout(120_000),
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-
-    throw new Error(
-      `Remote AI request failed (${response.status}): ${body}`,
-    );
-  }
-
-  const data = (await response.json()) as GenerateResponse;
-
-  if (!data.text || typeof data.text !== "string") {
-    throw new Error("Remote AI returned an invalid response");
-  }
-
-  return data.text.trim();
+function buildMessages(system: string, user: string) {
+    return [
+        {
+            role: "system" as const,
+            content: system,
+        },
+        {
+            role: "user" as const,
+            content: user,
+        },
+    ];
 }
 
 export const remoteProvider: AIProvider = {
-  async generateText({ model, system, user }) {
-    return generate(model, system, user);
-  },
+    async generateText({ model, system, user }) {
+        const client = getClient();
 
-  async generateStructured<T>(
-    {
-      model,
-      system,
-      user,
-    }: {
-      model: string;
-      system: string;
-      user: string;
+        const response =
+            await client.chat.completions.create({
+                model,
+                messages: buildMessages(system, user),
+                stream: false,
+            });
+
+        return (
+            response.choices[0]?.message?.content?.trim() ??
+            ""
+        );
     },
-    schema: ZodType<T>,
-  ): Promise<T> {
-    const text = await generate(
-      model,
-      `${system}
+
+    async *streamText({ model, system, user }) {
+        const client = getClient();
+
+        const stream =
+            await client.chat.completions.create({
+                model,
+                messages: buildMessages(system, user),
+                stream: true,
+            });
+
+        for await (const chunk of stream) {
+            const content =
+                chunk.choices[0]?.delta?.content;
+
+            if (content) {
+                yield content;
+            }
+        }
+    },
+
+    async generateStructured<T>(
+        {
+            model,
+            system,
+            user,
+        }: {
+            model: string;
+            system: string;
+            user: string;
+        },
+        schema: ZodType<T>,
+    ): Promise<T> {
+        const client = getClient();
+
+        const response =
+            await client.chat.completions.create({
+                model,
+                messages: buildMessages(
+                    `${system}
 
 Return ONLY valid JSON.
 Do not use markdown fences.
 Do not include explanations outside the JSON.`,
-      user,
-      300,
-    );
+                    user,
+                ),
+                stream: false,
+            });
 
-    let parsed: unknown;
+        const content =
+            response.choices[0]?.message?.content;
 
-    try {
-      parsed = JSON.parse(text);
-      console.info("[AI STRUCTURED RAW]", {
-        text,
-        parsed,
-      });
-    } catch {
-      throw new Error("Remote AI returned invalid JSON");
-    }
+        if (!content) {
+            throw new Error(
+                "Remote AI returned an empty structured response",
+            );
+        }
 
-    return schema.parse(parsed);
-  },
+        let parsed: unknown;
+
+        try {
+            parsed = JSON.parse(content);
+        } catch {
+            throw new Error(
+                "Remote AI returned invalid JSON",
+            );
+        }
+
+        return schema.parse(parsed);
+    },
 };
