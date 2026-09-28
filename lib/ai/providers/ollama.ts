@@ -7,7 +7,7 @@ const baseURL =
 
 const REQUEST_TIMEOUT_MS = 120_000;
 
-function createTimeoutSignal() {
+function createTimeoutSignal(): AbortSignal {
     return AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 }
 
@@ -25,99 +25,96 @@ function buildMessages(system: string, user: string) {
 }
 
 type OllamaChatChunk = {
+    model?: string;
+    created_at?: string;
     message?: {
         role?: string;
         content?: string;
         thinking?: string;
     };
     done?: boolean;
+    done_reason?: string;
+
+    total_duration?: number;
+    load_duration?: number;
+    prompt_eval_count?: number;
+    prompt_eval_duration?: number;
+    eval_count?: number;
+    eval_duration?: number;
 };
+
+async function assertOK(response: Response): Promise<void> {
+    if (response.ok) {
+        return;
+    }
+
+    const body = await response.text();
+
+    throw new Error(
+        `Ollama request failed (${response.status}): ${body}`,
+    );
+}
 
 async function readJSONResponse(
     response: Response,
 ): Promise<OllamaChatChunk> {
-    if (!response.ok) {
-        const body = await response.text();
-
-        throw new Error(
-            `Ollama request failed (${response.status}): ${body}`,
-        );
-    }
+    await assertOK(response);
 
     return (await response.json()) as OllamaChatChunk;
 }
 
 export const ollamaProvider: AIProvider = {
     async generateText({ model, system, user }) {
-        const response = await fetch(
-            `${baseURL}/api/chat`,
-            {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    model,
-                    messages: buildMessages(system, user),
-                    stream: false,
-                    think: false,
-                }),
-                signal: createTimeoutSignal(),
+        const response = await fetch(`${baseURL}/api/chat`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
             },
-        );
+            body: JSON.stringify({
+                model,
+                messages: buildMessages(system, user),
+                stream: false,
+                think: false,
+            }),
+            signal: createTimeoutSignal(),
+        });
 
         const data = await readJSONResponse(response);
 
         return data.message?.content?.trim() ?? "";
     },
 
-    async *streamText({
-        model,
-        system,
-        user,
-    }) {
-        const response = await fetch(
-            `${baseURL}/api/chat`,
-            {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    model,
-                    messages: buildMessages(system, user),
-                    stream: true,
-                    think: false,
-                }),
-                signal: createTimeoutSignal(),
+    async *streamText({ model, system, user }) {
+        const response = await fetch(`${baseURL}/api/chat`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
             },
-        );
+            body: JSON.stringify({
+                model,
+                messages: buildMessages(system, user),
+                stream: true,
+                think: false,
+            }),
+            signal: createTimeoutSignal(),
+        });
 
-        if (!response.ok) {
-            const body = await response.text();
-
-            throw new Error(
-                `Ollama streaming request failed (${response.status}): ${body}`,
-            );
-        }
+        await assertOK(response);
 
         if (!response.body) {
             throw new Error(
-                "Ollama returned an empty response body",
+                "Ollama returned an empty streaming response body.",
             );
         }
 
-        const reader =
-            response.body.getReader();
-
+        const reader = response.body.getReader();
         const decoder = new TextDecoder();
 
         let buffer = "";
 
         try {
             while (true) {
-                const { value, done } =
-                    await reader.read();
+                const { value, done } = await reader.read();
 
                 if (done) {
                     break;
@@ -127,31 +124,29 @@ export const ollamaProvider: AIProvider = {
                     stream: true,
                 });
 
-                const lines =
-                    buffer.split("\n");
+                const lines = buffer.split("\n");
 
-                buffer =
-                    lines.pop() ?? "";
+                buffer = lines.pop() ?? "";
 
                 for (const line of lines) {
-                    const trimmed =
-                        line.trim();
+                    const trimmed = line.trim();
 
                     if (!trimmed) {
                         continue;
                     }
 
-                    const chunk =
-                        JSON.parse(
-                            trimmed,
-                        ) as OllamaChatChunk;
+                    let chunk: OllamaChatChunk;
 
-                    /*
-                     * With think:false, we only
-                     * care about message.content.
-                     */
-                    const content =
-                        chunk.message?.content;
+                    try {
+                        chunk = JSON.parse(trimmed) as OllamaChatChunk;
+                    } catch {
+                        throw new Error(
+                            `Ollama returned invalid streaming JSON: ${trimmed}`,
+                        );
+                    }
+
+                    // With think:false, normal assistant text is in content.
+                    const content = chunk.message?.content;
 
                     if (content) {
                         yield content;
@@ -163,16 +158,23 @@ export const ollamaProvider: AIProvider = {
                 }
             }
 
+            // Flush any remaining UTF-8 bytes.
             buffer += decoder.decode();
 
-            if (buffer.trim()) {
-                const chunk =
-                    JSON.parse(
-                        buffer.trim(),
-                    ) as OllamaChatChunk;
+            const trimmed = buffer.trim();
 
-                const content =
-                    chunk.message?.content;
+            if (trimmed) {
+                let chunk: OllamaChatChunk;
+
+                try {
+                    chunk = JSON.parse(trimmed) as OllamaChatChunk;
+                } catch {
+                    throw new Error(
+                        `Ollama returned invalid trailing JSON: ${trimmed}`,
+                    );
+                }
+
+                const content = chunk.message?.content;
 
                 if (content) {
                     yield content;
@@ -195,40 +197,35 @@ export const ollamaProvider: AIProvider = {
         },
         schema: ZodType<T>,
     ): Promise<T> {
-        const response = await fetch(
-            `${baseURL}/api/chat`,
-            {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    model,
-                    messages: buildMessages(
-                        `${system}
+        const response = await fetch(`${baseURL}/api/chat`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                model,
+                messages: buildMessages(
+                    `${system}
 
 Return ONLY valid JSON.
 Do not use markdown fences.
 Do not include explanations outside the JSON.`,
-                        user,
-                    ),
-                    stream: false,
-                    think: false,
-                    format: "json",
-                }),
-                signal: createTimeoutSignal(),
-            },
-        );
+                    user,
+                ),
+                stream: false,
+                think: false,
+                format: "json",
+            }),
+            signal: createTimeoutSignal(),
+        });
 
-        const data =
-            await readJSONResponse(response);
+        const data = await readJSONResponse(response);
 
-        const content =
-            data.message?.content;
+        const content = data.message?.content;
 
         if (!content) {
             throw new Error(
-                "Ollama returned an empty structured response",
+                "Ollama returned an empty structured response.",
             );
         }
 
@@ -238,7 +235,7 @@ Do not include explanations outside the JSON.`,
             parsed = JSON.parse(content);
         } catch {
             throw new Error(
-                "Ollama returned invalid JSON",
+                `Ollama returned invalid JSON: ${content}`,
             );
         }
 
