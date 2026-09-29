@@ -58,47 +58,77 @@ export const eventActionSchema = z.enum([
 export const eventExtractionSchema = z.object({
   action: eventActionSchema,
 
-  /**
-   * Only use an existing candidate event ID when action = "update".
-   * Never invent IDs.
-   */
-  candidateEventId: z.string().uuid().nullable(),
+  candidateEventId: z
+    .string()
+    .uuid()
+    .nullable()
+    .catch(null),
 
-  title: z.string().min(1).max(200).nullable(),
+  title: z
+    .string()
+    .min(1)
+    .max(200)
+    .nullable()
+    .catch(null),
 
-  description: z.string().max(1500).nullable(),
+  description: z
+    .string()
+    .max(1500)
+    .nullable()
+    .catch(null),
 
-  eventType: eventTypeSchema.nullable(),
+  eventType: eventTypeSchema
+    .nullable()
+    .catch(null),
 
-  status: eventStatusSchema.nullable(),
+  status: eventStatusSchema
+    .nullable()
+    .catch(null),
 
-  certainty: eventCertaintySchema,
+  certainty: eventCertaintySchema
+    .catch("asserted"),
 
-  startAt: z.string().datetime().nullable(),
+  startAt: z
+    .string()
+    .datetime()
+    .nullable()
+    .catch(null),
 
-  endAt: z.string().datetime().nullable(),
+  endAt: z
+    .string()
+    .datetime()
+    .nullable()
+    .catch(null),
 
-  timePrecision: eventTimePrecisionSchema,
+  timePrecision: eventTimePrecisionSchema
+    .catch("unknown"),
 
-  rawTimeText: z.string().max(300).nullable(),
+  rawTimeText: z
+    .string()
+    .max(300)
+    .nullable()
+    .catch(null),
 
   importance: z
     .number()
     .int()
     .min(1)
     .max(5)
-    .nullable(),
+    .nullable()
+    .catch(null),
 
   confidence: z
     .number()
     .min(0)
-    .max(1),
+    .max(1)
+    .catch(0),
 
   evidence: z
     .string()
     .min(1)
     .max(1000)
-    .nullable(),
+    .nullable()
+    .catch(null),
 });
 
 export type EventExtraction =

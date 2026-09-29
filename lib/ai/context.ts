@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { retrieveRelevantMemories } from "@/lib/memory/memory-retrieval";
+import { searchTimelineFacts } from "@/lib/graphiti/client";
 import type { TimelineContext } from "./gateway";
 
 export async function buildTimelineContext(
@@ -18,7 +19,7 @@ export async function buildTimelineContext(
         throw new Error("Unauthorized");
     }
 
-    // 2. Load the requested timeline
+    // 2. Load the requested timeline.
     //    The user_id check prevents accessing another user's timeline.
     const { data: timeline, error: timelineError } = await supabase
         .from("timelines")
@@ -55,31 +56,49 @@ export async function buildTimelineContext(
         throw new Error("Failed to load conversation");
     }
 
-    // We queried newest → oldest for efficiency,
-    // but the AI should receive the conversation oldest → newest.
+    // Newest → oldest from DB, oldest → newest for the model.
     const recentMessages = (messages ?? []).reverse();
 
-    // 5. Find the current/latest user message.
-    //    /api/messages saves the user message before building context,
-    //    so the latest user message is the retrieval query.
-    const currentUserMessage =
+    // 5. The latest user message is the retrieval query.
+    const retrievalQuery =
         [...recentMessages]
             .reverse()
             .find((message) => message.role === "user")
             ?.content ?? "";
 
-    // 6. Retrieve only semantically relevant ACTIVE memories
-    //    from this exact timeline.
-    const retrievedMemories = await retrieveRelevantMemories({
-        userId: user.id,
-        timelineId,
-        query: currentUserMessage,
-        matchCount: 3,
-        minSimilarity: 0.72,
-    });
+    // 6. Retrieve persistent memories + temporal Graphiti facts.
+    //
+    // Both are scoped to the authenticated user's requested timeline.
+    const [retrievedMemories, graphFacts] = await Promise.all([
+        retrievalQuery
+            ? retrieveRelevantMemories({
+                  userId: user.id,
+                  timelineId,
+                  query: retrievalQuery,
+                  matchCount: 3,
+                  minSimilarity: 0.72,
+              })
+            : Promise.resolve([]),
 
-    // Do not expose retrieval internals such as similarity
-    // to the conversation model.
+        retrievalQuery
+            ? searchTimelineFacts({
+                  timelineId,
+                  query: retrievalQuery,
+                  numResults: 6,
+              }).catch((error) => {
+                  // Graphiti is a retrieval layer.
+                  // A temporary Graphiti failure must not break chat.
+                  console.error(
+                      "[GRAPHITI RETRIEVAL] failed:",
+                      error,
+                  );
+
+                  return [];
+              })
+            : Promise.resolve([]),
+    ]);
+
+    // Do not expose memory retrieval internals such as similarity.
     const memories = retrievedMemories.map(
         ({ id, type, content, importance, confidence }) => ({
             id,
@@ -90,18 +109,29 @@ export async function buildTimelineContext(
         }),
     );
 
+    // Convert Graphiti's API shape into the internal context shape.
+    const formattedGraphFacts = graphFacts.map(
+        ({ fact, valid_at, invalid_at }) => ({
+            fact,
+            validAt: valid_at,
+            invalidAt: invalid_at,
+        }),
+    );
+
     console.info("[TIMELINE CONTEXT]", {
         timelineId,
         conversationId,
         recentMessages: recentMessages.length,
-        currentUserMessageLength: currentUserMessage.length,
+        retrievalQueryLength: retrievalQuery.length,
         retrievedMemories: memories.length,
+        retrievedGraphFacts: formattedGraphFacts.length,
     });
 
     return {
         timeline,
         profile,
         memories,
+        graphFacts: formattedGraphFacts,
         recentMessages,
     };
 }

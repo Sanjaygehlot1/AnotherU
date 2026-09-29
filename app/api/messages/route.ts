@@ -1,8 +1,9 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { buildTimelineContext } from "@/lib/ai/context";
 import { streamPresentYouResponse } from "@/lib/ai/gateway";
 import { createClient } from "@/lib/supabase/server";
-
+import { addTimelineEpisode } from "@/lib/graphiti/client";
+import { processTimelineEvent } from "@/lib/timeline-events/processor";
 
 function sse(event: string, data: unknown) {
     return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -237,6 +238,69 @@ export async function POST(request: Request) {
                     }
                 }
             },
+        });
+
+        after(async () => {
+            // Event extraction + Supabase timeline state
+            try {
+                const timezone =
+                    typeof body.timezone === "string" &&
+                        body.timezone.length > 0
+                        ? body.timezone
+                        : "UTC";
+
+                await processTimelineEvent({
+                    supabase,
+                    userId: user.id,
+                    timelineId: conversation.timeline_id,
+                    sourceMessageId: userMessage.id,
+                    userMessage: userMessage.content,
+                    currentTimestamp: userMessage.created_at,
+                    timezone,
+                });
+            } catch (error) {
+                console.error(
+                    "[TIMELINE EVENT PROCESSING] failed",
+                    {
+                        timelineId: conversation.timeline_id,
+                        sourceMessageId: userMessage.id,
+                        error,
+                    },
+                );
+            }
+
+            // Graphiti temporal graph ingestion
+            try {
+                const speaker =
+                    user.user_metadata?.full_name ??
+                    user.user_metadata?.name ??
+                    "User";
+
+                await addTimelineEpisode({
+                    timelineId: conversation.timeline_id,
+                    sourceMessageId: userMessage.id,
+                    speaker,
+                    content: userMessage.content,
+                    referenceTime: userMessage.created_at,
+                });
+
+                console.info(
+                    "[GRAPHITI INGESTION] success",
+                    {
+                        timelineId: conversation.timeline_id,
+                        sourceMessageId: userMessage.id,
+                    },
+                );
+            } catch (error) {
+                console.error(
+                    "[GRAPHITI INGESTION] failed",
+                    {
+                        timelineId: conversation.timeline_id,
+                        sourceMessageId: userMessage.id,
+                        error,
+                    },
+                );
+            }
         });
 
         return new Response(stream, {

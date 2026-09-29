@@ -17,6 +17,7 @@ export type TimelineContext = {
   };
 
   memories: Array<{
+    id: string;
     type: string;
     content: string;
     importance: number;
@@ -27,7 +28,15 @@ export type TimelineContext = {
     role: "user" | "assistant";
     content: string;
   }>;
+
+  graphFacts: Array<{
+    fact: string;
+    validAt: string | null;
+    invalidAt: string | null;
+  }>;
 };
+
+
 
 export type AITask =
   | "conversation"
@@ -97,6 +106,26 @@ const providers: Record<string, AIProvider> = {
   remote: remoteProvider,
 };
 
+function formatGraphFacts(context: TimelineContext) {
+  if (context.graphFacts.length === 0) {
+    return "No temporal graph facts retrieved.";
+  }
+
+  return context.graphFacts
+    .map((fact) => {
+      const validity =
+        fact.invalidAt === null
+          ? `valid from ${fact.validAt ?? "unknown"}`
+          : `valid from ${
+              fact.validAt ?? "unknown"
+            } until ${fact.invalidAt}`;
+
+      return `- ${fact.fact} (${validity})`;
+    })
+    .join("\n");
+}
+
+
 function truncate(text: string | null, max: number) {
   if (!text) {
     return "";
@@ -132,42 +161,7 @@ function resolveTask(task: AITask) {
   };
 }
 
-function formatMemories(context: TimelineContext) {
-  if (context.memories.length === 0) {
-    return "None.";
-  }
 
-  return context.memories
-    .slice(0, 3)
-    .map(
-      (memory) =>
-        `${memory.type}: ${memory.content}`,
-    )
-    .join("\n");
-}
-
-function formatConversation(context: TimelineContext) {
-  if (context.recentMessages.length <= 1) {
-    return "None.";
-  }
-
-  // The latest user message is sent separately as the user prompt.
-  // Do not duplicate it in the system context.
-  const previousMessages = context.recentMessages
-    .slice(0, -1)
-    .slice(-4);
-
-  if (previousMessages.length === 0) {
-    return "None.";
-  }
-
-  return previousMessages
-    .map(
-      (message) =>
-        `${message.role === "user" ? "User" : "Present You"}: ${message.content}`,
-    )
-    .join("\n");
-}
 
 function buildPresentYouPrompt(context: TimelineContext) {
   const profile = [
@@ -213,6 +207,46 @@ locations, routines, possessions, feelings, motives, habits, or traits.
 Interest is not experience. Preference is not behavior.
 Goal is not achievement. Unknown stays unknown.
 Assistant messages are never evidence.
+
+TEMPORAL GRAPH FACTS
+
+These facts were retrieved from the temporal graph for THIS timeline.
+
+A fact with invalidAt = null has not been superseded in the graph.
+
+A fact with invalidAt set is historical evidence and has been superseded.
+
+Use current facts for present-state questions.
+Use historical facts when the user asks about the past or what changed.
+
+Do not invent details around a graph fact.
+Do not treat a graph fact as proof of anything beyond what the fact itself states.
+Do not mix facts from another timeline.
+
+${formatGraphFacts(context)}
+
+FACT VALIDITY
+
+A fact with invalidAt = null has not been superseded in the graph.
+
+A fact with invalidAt set has been superseded and should be treated as
+historical evidence.
+
+Do not assume an open-ended fact is automatically a current activity,
+current plan, or present-day state. Interpret it together with the fact
+itself and the user's other supplied context.
+
+Use current facts for present-state questions.
+
+Use historical facts when the user asks what changed, what used to be true,
+or about their past.
+
+Never treat a hypothetical, conditional, or uncertain statement as a confirmed
+real-world fact merely because it appears in the graph.
+
+Do not mix facts from another timeline.
+
+${formatGraphFacts(context)}
 
 TIMELINE STATE
 The timeline may contain no recorded events or current activity.
