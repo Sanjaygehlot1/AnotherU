@@ -214,30 +214,24 @@ export async function processTimelineEvent(
                 timeline_id: timelineId,
                 source_message_id: sourceMessageId,
                 action: "create",
-                evidence:
-                    extraction.evidence ?? userMessage,
+                evidence: extraction.evidence,
+                confidence: extraction.confidence, // REQUIRED
                 changes: {
                     title: extraction.title,
                     description: extraction.description,
-                    eventType:
-                        extraction.eventType ?? "other",
-                    status:
-                        extraction.status ?? "unknown",
+                    eventType: extraction.eventType,
+                    status: extraction.status,
                     startAt: extraction.startAt,
                     endAt: extraction.endAt,
-                    timePrecision:
-                        extraction.timePrecision,
-                    certainty:
-                        extraction.certainty,
-                    confidence:
-                        extraction.confidence,
+                    timePrecision: extraction.timePrecision,
+                    certainty: extraction.certainty,
+                    confidence: extraction.confidence,
                 },
             });
 
         if (evidenceError) {
-            console.error(
-                "[TIMELINE EVENT EVIDENCE] create failed",
-                evidenceError,
+            throw new Error(
+                `Failed to save event evidence: ${evidenceError.message}`,
             );
         }
 
@@ -384,6 +378,7 @@ export async function processTimelineEvent(
                 user_id: userId,
                 timeline_id: timelineId,
                 source_message_id: sourceMessageId,
+                confidence: extraction.confidence,
                 action: "update",
                 evidence:
                     extraction.evidence ?? userMessage,
@@ -404,9 +399,8 @@ export async function processTimelineEvent(
             });
 
         if (evidenceError) {
-            console.error(
-                "[TIMELINE EVENT EVIDENCE] update failed",
-                evidenceError,
+            throw new Error(
+                `Failed to save event update evidence: ${evidenceError.message}`,
             );
         }
 
